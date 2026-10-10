@@ -1,0 +1,642 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Finger Dancer</title>
+<style>
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: Arial, sans-serif;
+  background: #130b35;
+  color: white;
+  touch-action: none;
+}
+#game {
+  position: relative;
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  background: radial-gradient(ellipse at top, #43218a, #130b35 75%);
+}
+canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+.screen {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 24px;
+  background: rgba(15, 7, 45, .88);
+}
+.hidden { display: none !important; }
+.logo {
+  font-size: clamp(45px, 12vw, 75px);
+  font-weight: 900;
+  line-height: 1;
+  color: #ffdc52;
+  text-shadow: 4px 5px #f02ca5, 0 0 35px #a83bff;
+  transform: rotate(-5deg);
+  margin-bottom: 25px;
+}
+.subtitle {
+  font-size: 17px;
+  color: #d9c9ff;
+  max-width: 310px;
+  line-height: 1.6;
+}
+input {
+  width: min(300px, 85vw);
+  padding: 16px;
+  margin: 22px 0;
+  border: 3px solid #a875ff;
+  border-radius: 15px;
+  font-size: 20px;
+  text-align: center;
+  outline: none;
+  color: #251247;
+  background: white;
+}
+button {
+  border: none;
+  border-radius: 50px;
+  padding: 18px 55px;
+  font-size: 24px;
+  font-weight: 900;
+  color: #27103c;
+  background: linear-gradient(135deg, #ffea61, #ff8c45);
+  box-shadow: 0 7px 0 #bf4d54, 0 0 35px #ff6c8780;
+  cursor: pointer;
+  transition: transform .1s;
+}
+button:active { transform: translateY(5px); }
+.hint {
+  margin-top: 30px;
+  color: #a99bce;
+  font-size: 14px;
+  line-height: 1.8;
+}
+#hud {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  width: 100%;
+  padding: max(18px, env(safe-area-inset-top)) 20px 12px;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  font-weight: bold;
+  text-shadow: 0 2px 5px #000;
+}
+#score { font-size: 29px; color: #ffea61; }
+#player { color: #89fff2; }
+#lives { font-size: 23px; }
+#message {
+  position: absolute;
+  z-index: 4;
+  top: 27%;
+  left: 0;
+  width: 100%;
+  text-align: center;
+  font-size: 34px;
+  font-weight: 900;
+  pointer-events: none;
+  text-shadow: 3px 4px #6025a0;
+}
+#finalScore {
+  font-size: 65px;
+  color: #ffdc52;
+  font-weight: 900;
+  margin: 15px;
+}
+#bestText { color: #89fff2; margin-bottom: 28px; }
+</style>
+</head>
+<body>
+<div id="game">
+  <canvas id="canvas"></canvas>
+
+  <div id="hud" class="hidden">
+    <div>
+      <div id="player"></div>
+      <div id="score">0</div>
+    </div>
+    <div id="lives">❤️❤️❤️</div>
+  </div>
+
+  <div id="message"></div>
+
+  <div id="startScreen" class="screen">
+    <div class="logo">FINGER<br>DANCER ✨</div>
+    <p class="subtitle">
+      Catch the beat! Tap the glowing circles and swipe the arrows.
+      Become a finger dancing superstar!
+    </p>
+    <input id="nameInput" type="text"
+      placeholder="Your first name" maxlength="16"
+      autocomplete="given-name">
+    <button id="playBtn">▶ PLAY</button>
+    <div class="hint">
+      📱 Tap circles • Swipe arrows<br>
+      💻 Click circles • Arrow keys for arrows<br>
+      Don't miss 3 notes!
+    </div>
+  </div>
+
+  <div id="overScreen" class="screen hidden">
+    <div class="logo">DANCE<br>OVER!</div>
+    <div id="resultName"></div>
+    <div id="finalScore">0</div>
+    <div id="bestText"></div>
+    <button id="againBtn">↻ PLAY AGAIN</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+  const $ = id => document.getElementById(id);
+
+  let W = 0, H = 0, dpr = 1;
+  let running = false;
+  let score = 0, lives = 3, combo = 0;
+  let best = 0, name = "Dancer";
+  let notes = [], particles = [], stars = [];
+  let elapsed = 0, spawnTimer = 0, lastTime = 0;
+  let messageTimer = 0;
+  let audio = null;
+  let pointerStart = null;
+  let nextId = 0;
+
+  const colors = ["#ff5ca8", "#4cebdc", "#ffe45c", "#aa78ff"];
+  const symbols = ["↑", "→", "↓", "←"];
+  const directions = ["up", "right", "down", "left"];
+
+  try {
+    best = Number(localStorage.getItem("fingerDancerBest")) || 0;
+    $("nameInput").value = localStorage.getItem("fingerDancerName") || "";
+  } catch(e) {}
+
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    stars = Array.from({length: 55}, () => ({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      r: Math.random() * 2 + .5,
+      phase: Math.random() * 6.28
+    }));
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  function initAudio() {
+    if (!audio) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) audio = new AC();
+    }
+    if (audio && audio.state === "suspended") audio.resume();
+  }
+
+  function beep(freq = 440, duration = .12, type = "sine", volume = .08) {
+    if (!audio) return;
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    const now = audio.currentTime;
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, now);
+    gain.gain.setValueAtTime(volume, now);
+    gain.gain.exponentialRampToValueAtTime(.001, now + duration);
+    osc.connect(gain);
+    gain.connect(audio.destination);
+    osc.start(now);
+    osc.stop(now + duration);
+  }
+
+  function startGame() {
+    initAudio();
+    name = $("nameInput").value.trim() || "Dancer";
+    try { localStorage.setItem("fingerDancerName", name); } catch(e) {}
+
+    score = 0;
+    lives = 3;
+    combo = 0;
+    elapsed = 0;
+    spawnTimer = .8;
+    notes = [];
+    particles = [];
+    running = true;
+    nextId = 0;
+    pointerStart = null;
+
+    $("startScreen").classList.add("hidden");
+    $("overScreen").classList.add("hidden");
+    $("hud").classList.remove("hidden");
+    $("player").textContent = "⭐ " + name;
+    $("score").textContent = "0";
+    $("lives").textContent = "❤️❤️❤️";
+    showMessage("LET'S DANCE!", 1);
+    beep(523, .15);
+    setTimeout(() => beep(784, .18), 120);
+    lastTime = performance.now();
+  }
+
+  function endGame() {
+    running = false;
+    if (score > best) {
+      best = score;
+      try { localStorage.setItem("fingerDancerBest", best); } catch(e) {}
+    }
+    $("hud").classList.add("hidden");
+    $("overScreen").classList.remove("hidden");
+    $("resultName").textContent = "Amazing moves, " + name + "!";
+    $("finalScore").textContent = score;
+    $("bestText").textContent = "🏆 Best Score: " + best;
+    $("message").textContent = "";
+    beep(280, .25, "triangle");
+    setTimeout(() => beep(180, .4, "triangle"), 180);
+  }
+
+  function showMessage(text, time = .55) {
+    $("message").textContent = text;
+    messageTimer = time;
+  }
+
+  function difficulty() {
+    return Math.min(1 + elapsed / 38, 3.3);
+  }
+
+  function spawnNote() {
+    const lane = Math.floor(Math.random() * 4);
+    const swipe = Math.random() < Math.min(.22 + elapsed / 200, .48);
+    const radius = Math.min(W / 11, 37);
+    const x = W * (lane + .5) / 4;
+    const targetY = H * .78;
+
+    notes.push({
+      id: nextId++,
+      x,
+      y: -radius - 15,
+      lane,
+      radius,
+      targetY,
+      speed: (155 + elapsed * 2.5) * Math.min(difficulty(), 2.1),
+      type: swipe ? "swipe" : "tap",
+      direction: directions[Math.floor(Math.random() * 4)],
+      color: colors[lane],
+      rotation: 0
+    });
+  }
+
+  function burst(x, y, color, count = 16) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = 70 + Math.random() * 200;
+      particles.push({
+        x, y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        life: .5 + Math.random() * .35,
+        maxLife: .85,
+        color,
+        r: 2 + Math.random() * 5
+      });
+    }
+  }
+
+  function hitNote(note) {
+    const index = notes.indexOf(note);
+    if (index < 0) return;
+
+    notes.splice(index, 1);
+    combo++;
+    const accuracy = Math.abs(note.y - note.targetY);
+    const perfect = accuracy < 35;
+    const points = (perfect ? 15 : 10) + Math.min(combo, 20);
+    score += points;
+    $("score").textContent = score;
+
+    burst(note.x, note.y, note.color, perfect ? 24 : 15);
+    showMessage(perfect ? "PERFECT! ✨" : "NICE! 💖");
+    beep(440 + note.lane * 110 + Math.min(combo * 12, 300),
+         .12, "sine", .09);
+
+    if (combo > 0 && combo % 10 === 0) {
+      showMessage(combo + " COMBO! 🔥", .9);
+      beep(880, .2, "triangle");
+    }
+  }
+
+  function missNote(note) {
+    const index = notes.indexOf(note);
+    if (index < 0) return;
+    notes.splice(index, 1);
+    lives--;
+    combo = 0;
+    $("lives").textContent = "❤️".repeat(Math.max(0, lives));
+    showMessage("MISS! 💔");
+    burst(note.x, Math.min(note.y, H), "#ff426a", 12);
+    beep(160, .22, "sawtooth", .04);
+    if (lives <= 0) endGame();
+  }
+
+  function handleInput(x, y, direction = null) {
+    if (!running) return;
+    initAudio();
+
+    let nearest = null;
+    let dist = Infinity;
+
+    for (const note of notes) {
+      if (Math.abs(note.y - note.targetY) > 100) continue;
+
+      const dx = Math.abs(note.x - x);
+      const dy = Math.abs(note.y - y);
+      const d = dx * .65 + dy;
+
+      if (d < dist && dx < W / 7 + 15) {
+        nearest = note;
+        dist = d;
+      }
+    }
+
+    if (!nearest) {
+      beep(200, .035, "sine", .015);
+      return;
+    }
+
+    if (nearest.type === "tap" && direction === null) {
+      hitNote(nearest);
+    } else if (nearest.type === "swipe" &&
+               direction === nearest.direction) {
+      hitNote(nearest);
+    } else {
+      showMessage(nearest.type === "swipe"
+        ? "SWIPE " + nearest.direction.toUpperCase() + "!"
+        : "TAP IT!");
+      beep(220, .05, "sine", .025);
+    }
+  }
+
+  canvas.addEventListener("pointerdown", e => {
+    if (!running) return;
+    e.preventDefault();
+    pointerStart = {
+      x: e.clientX,
+      y: e.clientY,
+      time: performance.now()
+    };
+    try { canvas.setPointerCapture(e.pointerId); } catch(err) {}
+  });
+
+  canvas.addEventListener("pointerup", e => {
+    if (!running || !pointerStart) return;
+    e.preventDefault();
+    const dx = e.clientX - pointerStart.x;
+    const dy = e.clientY - pointerStart.y;
+    let dir = null;
+
+    if (Math.hypot(dx, dy) > 25) {
+      dir = Math.abs(dx) > Math.abs(dy)
+        ? (dx > 0 ? "right" : "left")
+        : (dy > 0 ? "down" : "up");
+    }
+
+    handleInput(pointerStart.x, pointerStart.y, dir);
+    pointerStart = null;
+  });
+
+  canvas.addEventListener("pointercancel", () => {
+    pointerStart = null;
+  });
+
+  document.addEventListener("keydown", e => {
+    if (!running) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        startGame();
+      }
+      return;
+    }
+
+    const keyMap = {
+      ArrowUp: "up", ArrowRight: "right",
+      ArrowDown: "down", ArrowLeft: "left",
+      w: "up", d: "right", s: "down", a: "left"
+    };
+
+    if (keyMap[e.key]) {
+      e.preventDefault();
+      const dir = keyMap[e.key];
+      const candidates = notes
+        .filter(n => n.type === "swipe" &&
+          n.direction === dir &&
+          Math.abs(n.y - n.targetY) < 100)
+        .sort((a,b) =>
+          Math.abs(a.y - a.targetY) -
+          Math.abs(b.y - b.targetY));
+      if (candidates.length) hitNote(candidates[0]);
+    }
+
+    if (e.key === " " || e.key === "Enter") {
+      e.preventDefault();
+      const candidates = notes
+        .filter(n => n.type === "tap" &&
+          Math.abs(n.y - n.targetY) < 100)
+        .sort((a,b) =>
+          Math.abs(a.y - a.targetY) -
+          Math.abs(b.y - b.targetY));
+      if (candidates.length) hitNote(candidates[0]);
+    }
+  });
+
+  function update(dt) {
+    elapsed += dt;
+    spawnTimer -= dt;
+
+    if (spawnTimer <= 0) {
+      spawnNote();
+      const interval = Math.max(.38, 1.15 - elapsed * .012);
+      spawnTimer += interval;
+    }
+
+    for (const note of [...notes]) {
+      note.y += note.speed * dt;
+      note.rotation += dt * 1.7;
+      if (note.y > note.targetY + 105) {
+        missNote(note);
+        if (!running) break;
+      }
+    }
+
+    if (messageTimer > 0) {
+      messageTimer -= dt;
+      if (messageTimer <= 0) $("message").textContent = "";
+    }
+  }
+
+  function updateParticles(dt) {
+    for (const p of particles) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 170 * dt;
+      p.life -= dt;
+    }
+    particles = particles.filter(p => p.life > 0);
+  }
+
+  function drawBackground(t) {
+    ctx.clearRect(0, 0, W, H);
+
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, "#391778");
+    grad.addColorStop(.6, "#201052");
+    grad.addColorStop(1, "#120a32");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    for (const s of stars) {
+      ctx.globalAlpha = .3 + .5 * Math.sin(t * 2 + s.phase) ** 2;
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    if (!running) return;
+
+    const laneW = W / 4;
+    for (let i = 0; i < 4; i++) {
+      ctx.fillStyle = i % 2 === 0
+        ? "rgba(255,255,255,.045)"
+        : "rgba(255,255,255,.015)";
+      ctx.fillRect(i * laneW, 0, laneW, H);
+
+      ctx.strokeStyle = colors[i] + "45";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(i * laneW, 0);
+      ctx.lineTo(i * laneW, H);
+      ctx.stroke();
+    }
+
+    const targetY = H * .78;
+
+    ctx.save();
+    ctx.shadowBlur = 25;
+    ctx.shadowColor = "#ffeb72";
+    ctx.strokeStyle = "#ffeb72";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(0, targetY);
+    ctx.lineTo(W, targetY);
+    ctx.stroke();
+    ctx.restore();
+
+    for (let i = 0; i < 4; i++) {
+      const x = (i + .5) * laneW;
+      ctx.beginPath();
+      ctx.arc(x, targetY, Math.min(W / 11, 37), 0, Math.PI * 2);
+      ctx.strokeStyle = colors[i] + "80";
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    }
+
+    ctx.textAlign = "center";
+    ctx.font = "bold 13px Arial";
+    ctx.fillStyle = "#ffffffa0";
+    ctx.fillText("HIT THE BEAT", W / 2, targetY + 72);
+  }
+
+  function drawNotes(t) {
+    for (const n of notes) {
+      const pulse = 1 + Math.sin(t * 8 + n.id) * .055;
+      const r = n.radius * pulse;
+
+      ctx.save();
+      ctx.translate(n.x, n.y);
+
+      ctx.shadowBlur = 24;
+      ctx.shadowColor = n.color;
+      ctx.fillStyle = n.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "rgba(255,255,255,.85)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, r - 6, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.fillStyle = "#24104c";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+
+      if (n.type === "tap") {
+        ctx.font = `bold ${r * 1.2}px Arial`;
+        ctx.fillText("●", 0, -2);
+      } else {
+        ctx.font = `bold ${r * 1.4}px Arial`;
+        ctx.fillText(symbols[directions.indexOf(n.direction)], 0, -3);
+      }
+
+      ctx.restore();
+    }
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function frame(now) {
+    const dt = Math.min((now - lastTime) / 1000 || 0, .05);
+    lastTime = now;
+
+    if (running) update(dt);
+    updateParticles(dt);
+    drawBackground(now / 1000);
+    if (running) drawNotes(now / 1000);
+    drawParticles();
+
+    requestAnimationFrame(frame);
+  }
+
+  $("playBtn").addEventListener("click", startGame);
+  $("againBtn").addEventListener("click", startGame);
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
